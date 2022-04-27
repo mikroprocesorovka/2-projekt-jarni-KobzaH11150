@@ -1,0 +1,170 @@
+#include "stm8s.h"
+#include "milis.h"
+#include "swspi.h"
+#include "stdio.h"
+
+void max7219_init(void);
+void init_pwm(void);
+uint8_t x=0,y=0,z=0,a=0,budik=1,kontrola=1,sleep=0,blok=0,pocitadlo=0;
+uint16_t sec=0; 
+uint16_t desec=0;
+uint16_t min=0,cas=0;
+char prijaty_znak;
+
+INTERRUPT_HANDLER(AWU_IRQHandler, 1){
+	AWU_GetFlagStatus();
+	sleep++;
+	if(sleep == 5){
+		swspi_tx16(0x0c<<8 | 0b00000001);
+		sleep=0;
+		
+	}else{
+		halt();
+	}
+}
+
+void main(void){
+CLK_HSIPrescalerConfig(CLK_PRESCALER_HSIDIV1); // 16MHz z interního RC oscilátoru
+//inicializace fci
+init_milis(); 
+swspi_init();
+max7219_init();
+init_pwm();
+
+//øežim spánku
+EXTI_SetExtIntSensitivity(EXTI_PORT_GPIOC, EXTI_SENSITIVITY_FALL_ONLY);
+EXTI_SetTLISensitivity(EXTI_TLISENSITIVITY_FALL_ONLY);
+AWU_LSICalibrationConfig(110000);
+AWU_Init(AWU_TIMEBASE_12S);
+
+//inicializace vstupù
+GPIO_Init(GPIOE, GPIO_PIN_4,GPIO_MODE_IN_FL_NO_IT); //START/STOP
+
+UART1_Init(115200,UART1_WORDLENGTH_8D,UART1_STOPBITS_1,UART1_PARITY_NO,UART1_SYNCMODE_CLOCK_DISABLE,UART1_MODE_RX_ENABLE);//inicializace UARTU jako pøíjmaèe
+UART1_Cmd(ENABLE);
+
+swspi_tx16(0x05<<8 | 0b0000000);
+swspi_tx16(0x03<<8 | 0b0000000);
+swspi_tx16(0x02<<8 | 0b0000000);
+swspi_tx16(0x01<<8 | 0b0000000);
+
+GPIO_Init(GPIOC,GPIO_PIN_5,GPIO_MODE_OUT_PP_LOW_SLOW);
+
+	while (1){
+		//budik
+		if(UART1_GetFlagStatus(UART1_FLAG_RXNE) != RESET){ // pøijali jsme na UARTu nìjaký byte (který èeká na vyètení) ?
+			prijaty_znak=UART1_ReceiveData8(); // vyèti pøijatý bajt
+		
+			if(prijaty_znak == '1'){
+				GPIO_WriteReverse(GPIOC,GPIO_PIN_5);
+				budik=1;
+			}
+			if(prijaty_znak == '2'){
+				GPIO_WriteReverse(GPIOC,GPIO_PIN_5);
+				budik=2;
+			}
+			if(prijaty_znak == '3'){
+				GPIO_WriteReverse(GPIOC,GPIO_PIN_5);
+				budik=3;
+			}
+			if(prijaty_znak == '4'){
+				budik=4;
+			}
+			if(prijaty_znak == '5'){
+				budik=5;
+			}
+		}
+		//hodiny
+		if(milis()-sec >=1000){
+			sec=milis();
+			x++;
+			if(x==10){
+				x=0;
+				y++;
+				if(y==6){
+					y=0;
+					z++;
+					if(z==10){
+						z=0;
+						a++;
+					}
+				}
+				
+			}
+			swspi_tx16(0x04<<8 | a);
+			swspi_tx16(0x03<<8 | z);
+			swspi_tx16(0x02<<8 | y);
+			swspi_tx16(0x01<<8 | x);
+		}
+		
+		if(z == budik){
+			
+		if(pocitadlo <= 7)  
+			if(milis()-cas >= 1000 && blok==0){
+				blok=1;
+				TIM2_SetCompare1(17000);
+				cas=milis();
+			}
+			if(milis()-cas >= 1000 && blok==1){
+				cas=milis();
+				blok=0;
+				TIM2_SetCompare1(0);
+				pocitadlo++;
+			}
+		}
+		
+		//spánek
+		if(GPIO_ReadInputPin(GPIOE,GPIO_PIN_4)== RESET && kontrola==0){
+			kontrola=1;
+			swspi_tx16(0x0c<<8 | 0b00000000); 
+			halt();
+			
+		}
+		if(GPIO_ReadInputPin(GPIOE,GPIO_PIN_4)!= RESET){kontrola=0;}
+	}
+}
+
+void max7219_init(void){
+		swspi_tx16(0x0c<<8 | 0b00000001); 	//shut down
+		swspi_tx16(0x0b<<8 | 0b00000111);		//scan limit
+		swspi_tx16(0x09<<8 | 0b11111111);		//decode mode
+		swspi_tx16(0x0a<<8 | 0b00000011); 	//jas
+}
+
+void init_pwm(void){
+TIM2_TimeBaseInit(TIM2_PRESCALER_16,20000-1);
+TIM2_OC1Init( 	
+	TIM2_OCMODE_PWM1, 			
+	TIM2_OUTPUTSTATE_ENABLE,
+	0,										
+	TIM2_OCPOLARITY_HIGH
+	);
+
+TIM2_OC1PreloadConfig(ENABLE);	
+TIM2_OC2PreloadConfig(ENABLE);
+TIM2_Cmd(ENABLE);
+}
+
+
+		
+// pod tímto komentáøem nic nemìòte 
+#ifdef USE_FULL_ASSERT
+
+/**
+  * @brief  Reports the name of the source file and the source line number
+  *   where the assert_param error has occurred.
+  * @param file: pointer to the source file name
+  * @param line: assert_param error line source number
+  * @retval : None
+  */
+void assert_failed(u8* file, u32 line)
+{ 
+  /* User can add his own implementation to report the file name and line number,
+     ex: printf("Wrong parameters value: file %s on line %d\r\n", file, line) */
+
+  /* Infinite loop */
+  while (1)
+  {
+  }
+}
+#endif
